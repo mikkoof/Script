@@ -3,11 +3,16 @@ parameter toStage to 1.
 LOCK g TO SHIP:BODY:MU / (SHIP:BODY:RADIUS + SHIP:ALTITUDE)^2.
 LOCK twr to (Thrust() / (g * ship:mass)).
 // *********** parameters *******************
+//Rocket types
+// #0 Sounding Rocket
+// #1 Controlled downrange rocket
+// #2 Orbit with kickback
 
-parameter desiredPeriapsis      to 200_000.
-parameter upperStageBurnTime    to 120.
-parameter pitchAtAp             to 90.
-
+parameter rocketType            to 0.
+parameter turnVelocity          to 0.   //How fast before rocket turns
+parameter targetPitch           to 0.
+parameter desiredInclanation    to 0. 
+parameter desiredPeriapsis     to 150_000.
 
 // *********** start pitch control *********************
 
@@ -39,13 +44,13 @@ function AltitudeIntegrationJerk {
 
 function TimeToAltitudeScore {
     parameter inputTime.
-    return desiredPeriapsis - AltitudeIntegrationJerk(inputTime).
+    return ship:body:atm:height - AltitudeIntegrationJerk(inputTime).
 }
 
 function MakePitchRateFunction {
     parameter vertspeed_min.
-    local pitchDestination to 0.
-    local finalPitch to pitchAtAp.
+    local pitchDestination to targetPitch.
+    local finalPitch to 90.
     local beginPitch to false.
     local timeLast to time:seconds.
 
@@ -71,7 +76,7 @@ function MakePitchRateFunction {
 
 local timeToAltitudeSolver to makeBiSectSolver(TimeToAltitudeScore@,100,101).
 local timeToAltitudeTestPoints to timeToAltitudeSolver().
-local PitchController to MakePitchRateFunction(65).
+local PitchController to MakePitchRateFunction(10).
 
 // *********** end pitch control *********************
 
@@ -79,9 +84,6 @@ local PitchController to MakePitchRateFunction(65).
 
 set boosters to SHIP:PARTSDUBBED("Booster").
 set sustainers to SHIP:PARTSDUBBED("Sustainer").
-set uppers to SHIP:PARTSDUBBED("Upper").
-set kickers to SHIP:PARTSDUBBED("Kicker").
-set ullageRcs to SHIP:PARTSDUBBED("ullageRcs").
 
 //Countdown
 PRINT "Count down:".
@@ -94,10 +96,7 @@ FROM {local countdown is 4.} UNTIL countdown = 0 STEP {SET countdown to countdow
 // ************* Init launch sequence *************
 set guidanceState to 1.
 set stageState to 1.
-
-local turnVelocity          to 100.
-local pitchAng              to 0.
-local desiredInclanation    to 0. 
+local pitchAng              to 0.  
 local compass               to inst_az(desiredInclanation).
 lock steering               to lookdirup(heading(compass,90-pitchAng):vector,ship:facing:upvector).
 set ship:control:Pilotmainthrottle to 1.
@@ -113,8 +112,10 @@ until guidanceState = 0 {
         }
     }
     else if guidanceState = 2 {
-        set timeToAltitudeTestPoints to TimeToAltitudeSolver().
-        set pitchAng to pitchController(timeToAltitudeTestPoints[2][0]).
+        if rocketType > 0. {
+            set timeToAltitudeTestPoints to TimeToAltitudeSolver().
+            set pitchAng to pitchController(timeToAltitudeTestPoints[2][0]).
+        }
     }
 
     else if guidanceState = 3 {
@@ -125,12 +126,9 @@ until guidanceState = 0 {
         set ship:control:Pilotmainthrottle to 0.
     }
     Stager().
-    OpenFairings().
 
 //Touchbase
-    set line to 0.
-    print "******** DEBUG ********" at(0, line).
-    set line to line + 1.
+    local line is 0.
     print "TWR = " + twr at(0, line).
     set line to line + 1.
     print "Guidance state = " + guidanceState at(0, line).
@@ -142,20 +140,9 @@ until guidanceState = 0 {
     print "Pitch = " + pitchAng at(0, line).
     set line to line + 1.
     print "steering = " + steering at(0, line).
-    set line to line + 1.
-    print "launch upper = " + (ship:apoapsis < desiredPeriapsis and ETA:apoapsis < (upperStageBurnTime / 2)) at(0, line).
-    set line to line + 1.
-    print "Eta apoapsis = " + ETA:apoapsis at(0, line).
-    set line to line + 1.
-    print "Boosters = " + boosters:length at(0, line).
-    set line to line + 1.
-    print "Sustainers = " + sustainers:length at(0, line).
-    set line to line + 1.
-    print "Uppers = " + uppers:length at(0, line).
-    set line to line + 1.
-    print "Kickers = " + kickers:length at(0, line).
-//     set line to line + 1.
-//     print "Upper fuel stability = " + Uppers[0]:fuelstability  at(0, line).
+    // set line to line + 1.
+    // print "timeToAltitudeTestPoints = " + timeToAltitudeTestPoints at(0, line).
+    
 }
 
 // *********** start azimuth control *****************
@@ -199,91 +186,43 @@ local function Launch{
         stage.
         // print twr.
         if stage:nextDecoupler:istype("LaunchClamp") {
-            wait until twr > 1.1.
+            wait until twr > 1.3.
             // print twr.
             stage.
-            wait 0.5.
         }
     } 
 }
 
-//stage if apogee under target altitude or time to apogee is under stage burn time.
-
 function Stager {
-    if stage:nextDecoupler<>"None" and stageState = 1{
-        if boosters:length <> 0 {
-            for booster in boosters {
-                if booster:flameout
-                {
-                    UNTIL STAGE:READY WAIT 0.
-                    stage.
-                    set boosters to SHIP:PARTSDUBBED("Booster").
-                    // print "Staging booster. Boosters lenght: " + boosters:length at(0, line).
-                }
-            }
-        } 
-        else if sustainers:length <> 0 {
-            //set stageState to toStage.
-            for sustainer in sustainers {
-                if sustainer:flameout {
-                    UNTIL STAGE:READY WAIT 0.
-                    // wait UNTIL sustainer:FUELSTABILITY >= 0.8.
-                    stage.
-                    set sustainers to SHIP:PARTSDUBBED("Sustainer").
-                    // print "staging sustainer. Sustainers lenght " + Sustainers:length at(0, line).
-                }
-            }
-        }
-        else if(ship:apoapsis < desiredPeriapsis or ETA:apoapsis < (upperStageBurnTime / 2)) {
-            if uppers:length <> 0{
-                //set stageState to toStage.
-                SortUllage().
-                for upper in uppers {
-                    //set stageState to 2.
-                    if upper:flameout {
-                        UNTIL STAGE:READY WAIT 0.
+    if stageState = 1 {
+        if stage:nextDecoupler<>"None" {
+            if boosters:length <> 0 {
+                for booster in boosters {
+                    if booster:flameout
+                    {
+                        UNTIL STAGE:READY {
+                            WAIT 0.
+                        }
+                        print "Staging booster. Boosters lenght: " + boosters:length.
                         stage.
-                        set boosters to SHIP:PARTSDUBBED("Upper").
-                        print "staging Upper. Uppers lenght " + Uppers:length  at(0, line).
+                        set boosters to SHIP:PARTSDUBBED("Booster").
+                        wait 0.
                     }
                 }
-            } else set stageState to 1.
-        }
-        // else if kickers:length <> 0{
-        //     set stageState to toStage.
-        //     for kicker in kickers {
-        //         UNTIL STAGE:READY {
-        //             WAIT 0.
-        //         }
-        //         if kicker:flameout {
-        //             stage.
-        //             set boosters to SHIP:PARTSDUBBED("Kicker").
-        //             print "staging Kicker. Kickers lenght " + Kickers:length  at(0, line).
-        //         }
-        //     }
-        // }
-    }
-}
-
-function SortUllage {
-    for upper in uppers
-    {
-        if (not upper:ignition)
-        {
-            // if ullageRcs:length <> 0 {
-            //     if(not ullageRcs:enabled) {
-            //         stage.
-            //     }
-            // }
-            // else stage.
-            stage.
-            set line to line + 1.
-            print "staging ullage thrusters "  at(0, line).
-            wait UNTIL upper:FUELSTABILITY >= 0.8.
-            wait until stage:READY.
-            stage.
-            set line to line + 1.
-            print "stagin upper stage"  at(0, line).
+            } 
+            else if sustainers:length <> 0 {
+                set stageState to toStage.
+                for sustainer in sustainers {
+                    UNTIL STAGE:READY {
+                        WAIT 0.
+                    }
+                    if sustainer:flameout {
+                        print "staging sustainer. Sustainers lenght " + Sustainers:length.
+                        stage.
+                        set boosters to SHIP:PARTSDUBBED("Sustainer").
+                    }
+                }
+            }
         }
     }
 }
@@ -298,7 +237,6 @@ local function Thrust {
 }
 
 function MachNumber {
-    
     parameter idx is 1.4.
     if not body:atm:exists or body:atm:altitudepressure(altitude) = 0 {
         return 0.
@@ -306,11 +244,4 @@ function MachNumber {
     return round(sqrt(2 / idx * ship:q / body:atm:altitudepressure(altitude)),3).
 }
 
-function OpenFairings {
-    if stage:nextDecoupler="None" {
-        if ship:altitude > 90_000 {
-            stage.
-        }
-    }
-}
 
