@@ -8,7 +8,6 @@ parameter desiredPeriapsis      to 200_000.
 parameter upperStageBurnTime    to 120.
 parameter pitchAtAp             to 90.
 
-
 // *********** start pitch control *********************
 
 RUNONCEPATH("Library/lib_BisectionSolver.ks").
@@ -39,7 +38,7 @@ function AltitudeIntegrationJerk {
 
 function TimeToAltitudeScore {
     parameter inputTime.
-    return desiredPeriapsis - AltitudeIntegrationJerk(inputTime).
+    return 150_000 - AltitudeIntegrationJerk(inputTime).
 }
 
 function MakePitchRateFunction {
@@ -69,9 +68,23 @@ function MakePitchRateFunction {
 }
 
 
+function PitchController2 {
+    local currentApoapsis to ship:apoapsis.
+    if ship:apoapsis > desiredPeriapsis and ETA:apoapsis > (timeToFlameout / 2) {
+        set pitchAng to pitchAng + 0.2.
+    }
+    else if ETA:apoapsis < (timeToFlameout / 2) {
+        set pitchAng to pitchAng - 0.2.
+    }
+    
+    set lastApoapsis to currentApoapsis.
+    set timeToFlameout to upperStageBurnTime - (TIME:seconds - upperStageIgnitedTime).
+    wait 0.001.
+}
+
 local timeToAltitudeSolver to makeBiSectSolver(TimeToAltitudeScore@,100,101).
 local timeToAltitudeTestPoints to timeToAltitudeSolver().
-local PitchController to MakePitchRateFunction(65).
+local PitchController to MakePitchRateFunction(10).
 
 // *********** end pitch control *********************
 
@@ -82,6 +95,7 @@ set sustainers to SHIP:PARTSDUBBED("Sustainer").
 set uppers to SHIP:PARTSDUBBED("Upper").
 set kickers to SHIP:PARTSDUBBED("Kicker").
 set ullageRcs to SHIP:PARTSDUBBED("ullageRcs").
+set payloadFairings to SHIP:PARTSDUBBED("plf").
 
 //Countdown
 PRINT "Count down:".
@@ -95,20 +109,23 @@ FROM {local countdown is 4.} UNTIL countdown = 0 STEP {SET countdown to countdow
 set guidanceState to 1.
 set stageState to 1.
 
-local turnVelocity          to 100.
+local turnAltitude         to 10.
+local lastApoapsis          to 0.
 local pitchAng              to 0.
 local desiredInclanation    to 0. 
 local compass               to inst_az(desiredInclanation).
 lock steering               to lookdirup(heading(compass,90-pitchAng):vector,ship:facing:upvector).
 set ship:control:Pilotmainthrottle to 1.
-
+set fairingsDeployed to false.
+set timeToFlameout to upperStageBurnTime.
+set upperStageIgnitedTime to 0.
 Launch().
 
 // ************ state machine **********************
 
 until guidanceState = 0 {
     if guidanceState = 1 {
-        if SHIP:VELOCITY:SURFACE:MAG > turnVelocity {
+        if altitude > turnAltitude {
             set guidanceState to 2.
         }
     }
@@ -118,7 +135,7 @@ until guidanceState = 0 {
     }
 
     else if guidanceState = 3 {
-        
+        pitchController2().
     }
 
     else if guidanceState = 0 {
@@ -126,7 +143,6 @@ until guidanceState = 0 {
     }
     Stager().
     OpenFairings().
-
 //Touchbase
     set line to 0.
     print "******** DEBUG ********" at(0, line).
@@ -143,9 +159,11 @@ until guidanceState = 0 {
     set line to line + 1.
     print "steering = " + steering at(0, line).
     set line to line + 1.
-    print "launch upper = " + (ship:apoapsis < desiredPeriapsis and ETA:apoapsis < (upperStageBurnTime / 2)) at(0, line).
+    print "launch upper = " + (ship:apoapsis < desiredPeriapsis or ETA:apoapsis < (upperStageBurnTime / 2)) at(0, line).
     set line to line + 1.
     print "Eta apoapsis = " + ETA:apoapsis at(0, line).
+    set line to line + 1.
+    print "TimeToFlameout = " + timeToFlameout at(0, line).
     set line to line + 1.
     print "Boosters = " + boosters:length at(0, line).
     set line to line + 1.
@@ -154,6 +172,8 @@ until guidanceState = 0 {
     print "Uppers = " + uppers:length at(0, line).
     set line to line + 1.
     print "Kickers = " + kickers:length at(0, line).
+    set line to line + 1.
+    print "Fairings = " + payloadFairings:length at(0, line).
 //     set line to line + 1.
 //     print "Upper fuel stability = " + Uppers[0]:fuelstability  at(0, line).
 }
@@ -227,7 +247,6 @@ function Stager {
             for sustainer in sustainers {
                 if sustainer:flameout {
                     UNTIL STAGE:READY WAIT 0.
-                    // wait UNTIL sustainer:FUELSTABILITY >= 0.8.
                     stage.
                     set sustainers to SHIP:PARTSDUBBED("Sustainer").
                     // print "staging sustainer. Sustainers lenght " + Sustainers:length at(0, line).
@@ -238,30 +257,21 @@ function Stager {
             if uppers:length <> 0{
                 //set stageState to toStage.
                 SortUllage().
+                set upperStageIgnitedTime to TIME:seconds.
                 for upper in uppers {
-                    //set stageState to 2.
                     if upper:flameout {
                         UNTIL STAGE:READY WAIT 0.
                         stage.
-                        set boosters to SHIP:PARTSDUBBED("Upper").
+                        set uppers to SHIP:PARTSDUBBED("Upper").
                         print "staging Upper. Uppers lenght " + Uppers:length  at(0, line).
                     }
                 }
-            } else set stageState to 1.
+                set stageState to 2.
+                set guidanceState to 3.
+                set lastApoapsis to ship:apoapsis.
+                set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
+            }
         }
-        // else if kickers:length <> 0{
-        //     set stageState to toStage.
-        //     for kicker in kickers {
-        //         UNTIL STAGE:READY {
-        //             WAIT 0.
-        //         }
-        //         if kicker:flameout {
-        //             stage.
-        //             set boosters to SHIP:PARTSDUBBED("Kicker").
-        //             print "staging Kicker. Kickers lenght " + Kickers:length  at(0, line).
-        //         }
-        //     }
-        // }
     }
 }
 
@@ -307,10 +317,12 @@ function MachNumber {
 }
 
 function OpenFairings {
-    if stage:nextDecoupler="None" {
-        if ship:altitude > 90_000 {
-            stage.
-        }
+    if (ship:altitude > 90_000 and not fairingsDeployed) {
+        stage.
+        set line to line +1.
+        print "Staging fairings " at(0, line).
+        wait 1.
+        set fairingsDeployed to true.
     }
 }
 
