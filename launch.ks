@@ -1,12 +1,15 @@
+// *********** parameters *******************
+parameter desiredPeriapsis      to 200_000. //At what altitude does the craft hit 90 pitch 
+parameter upperStageBurnTime    to 120.     
+parameter pitchAtAp             to 90.      //90
+parameter desiredInclanation    to 0. 
+
 clearScreen.
 parameter toStage to 1.
 LOCK g TO SHIP:BODY:MU / (SHIP:BODY:RADIUS + SHIP:ALTITUDE)^2.
 LOCK twr to (Thrust() / (g * ship:mass)).
-// *********** parameters *******************
 
-parameter desiredPeriapsis      to 200_000.
-parameter upperStageBurnTime    to 120.
-parameter pitchAtAp             to 90.
+
 
 // *********** start pitch control *********************
 
@@ -38,7 +41,7 @@ function AltitudeIntegrationJerk {
 
 function TimeToAltitudeScore {
     parameter inputTime.
-    return 150_000 - AltitudeIntegrationJerk(inputTime).
+    return desiredPeriapsis - AltitudeIntegrationJerk(inputTime). //160_000.
 }
 
 function MakePitchRateFunction {
@@ -67,18 +70,17 @@ function MakePitchRateFunction {
     }.
 }
 
+// check if the difference between ETA:apoapsis and time to flameout will be 0 before reaching apoapsis.
+// if not then pitch harder.
+
+
+set circBurnDegrees to 0. //7.6
 
 function PitchController2 {
-    local currentApoapsis to ship:apoapsis.
-    if ship:apoapsis > desiredPeriapsis and ETA:apoapsis > (timeToFlameout / 2) {
-        set pitchAng to pitchAng + 0.2.
-    }
-    else if ETA:apoapsis < (timeToFlameout / 2) {
-        set pitchAng to pitchAng - 0.2.
-    }
-    
-    set lastApoapsis to currentApoapsis.
     set timeToFlameout to upperStageBurnTime - (TIME:seconds - upperStageIgnitedTime).
+    local cirbBurnPrecent to 0.5  - (timeToFlameout / upperStageBurnTime).
+    set pitchAng to 90 - ((circBurnDegrees * cirbBurnPrecent)).
+    
     wait 0.001.
 }
 
@@ -93,9 +95,6 @@ local PitchController to MakePitchRateFunction(10).
 set boosters to SHIP:PARTSDUBBED("Booster").
 set sustainers to SHIP:PARTSDUBBED("Sustainer").
 set uppers to SHIP:PARTSDUBBED("Upper").
-set kickers to SHIP:PARTSDUBBED("Kicker").
-set ullageRcs to SHIP:PARTSDUBBED("ullageRcs").
-set payloadFairings to SHIP:PARTSDUBBED("plf").
 
 //Countdown
 PRINT "Count down:".
@@ -112,13 +111,13 @@ set stageState to 1.
 local turnAltitude         to 10.
 local lastApoapsis          to 0.
 local pitchAng              to 0.
-local desiredInclanation    to 0. 
 local compass               to inst_az(desiredInclanation).
 lock steering               to lookdirup(heading(compass,90-pitchAng):vector,ship:facing:upvector).
 set ship:control:Pilotmainthrottle to 1.
 set fairingsDeployed to false.
 set timeToFlameout to upperStageBurnTime.
 set upperStageIgnitedTime to 0.
+
 Launch().
 
 // ************ state machine **********************
@@ -163,7 +162,7 @@ until guidanceState = 0 {
     set line to line + 1.
     print "Eta apoapsis = " + ETA:apoapsis at(0, line).
     set line to line + 1.
-    print "TimeToFlameout = " + timeToFlameout at(0, line).
+    print "TimeToFlameout / 2 = " + timeToFlameout/2 at(0, line).
     set line to line + 1.
     print "Boosters = " + boosters:length at(0, line).
     set line to line + 1.
@@ -171,11 +170,7 @@ until guidanceState = 0 {
     set line to line + 1.
     print "Uppers = " + uppers:length at(0, line).
     set line to line + 1.
-    print "Kickers = " + kickers:length at(0, line).
-    set line to line + 1.
-    print "Fairings = " + payloadFairings:length at(0, line).
-//     set line to line + 1.
-//     print "Upper fuel stability = " + Uppers[0]:fuelstability  at(0, line).
+    print "Fairings deployed= " + fairingsDeployed at(0, line).
 }
 
 // *********** start azimuth control *****************
@@ -253,26 +248,25 @@ function Stager {
                 }
             }
         }
-        else if(ship:apoapsis < desiredPeriapsis or ETA:apoapsis < (upperStageBurnTime / 2)) {
+        else if(ETA:apoapsis < (upperStageBurnTime / 2)) {
             if uppers:length <> 0{
-                //set stageState to toStage.
                 SortUllage().
-                set upperStageIgnitedTime to TIME:seconds.
-                for upper in uppers {
-                    if upper:flameout {
-                        UNTIL STAGE:READY WAIT 0.
-                        stage.
-                        set uppers to SHIP:PARTSDUBBED("Upper").
-                        print "staging Upper. Uppers lenght " + Uppers:length  at(0, line).
-                    }
-                }
                 set stageState to 2.
                 set guidanceState to 3.
                 set lastApoapsis to ship:apoapsis.
+                set upperStageIgnitedTime to TIME:seconds.
                 set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
+                CreateCircularisationNode().
+                set circBurnDegrees to GetCircularisationBurnDegrees().
             }
         }
     }
+}
+
+function CreateCircularisationNode {
+    local requiredSpeed to sqrt(body:mu * (2/body:radius + apoapsis)).
+    set circNode to NODE(timeSpan(eta:apoapsis), 0, 0, requiredSpeed).
+    add circNode.
 }
 
 function SortUllage {
@@ -326,3 +320,9 @@ function OpenFairings {
     }
 }
 
+function GetCircularisationBurnDegrees {
+    local orbitDegrees to 360.
+    local orbitalPeriodSeconds to 5400.
+    local obtPeriodPrecent to upperStageBurnTime / orbitalPeriodSeconds.
+    return (orbitDegrees * obtPeriodPrecent). 
+}
