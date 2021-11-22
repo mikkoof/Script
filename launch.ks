@@ -117,9 +117,12 @@ function PitchController2 {
     until done {
         set maxACc to upperStageThrust/ship:mass.
         if(vdot(initialDv, nd:deltav) < 0) {
-        // if ((0.02 < ship:orbit:eccentricity and ship:orbit:eccentricity < 0.04) and periapsis > 300_000) {
+            lock steering to prograde.
+
+            wait until ((0.02 < ship:orbit:eccentricity and ship:orbit:eccentricity < 0.04) and periapsis > 300_000).
             SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
             set done to True.
+        
         }
     }
     remove nd.
