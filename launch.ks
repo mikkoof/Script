@@ -3,6 +3,7 @@ parameter desiredPeriapsis      to 200_000. //At what altitude does the craft hi
 parameter upperStageBurnTime    to 120.     
 parameter pitchAtAp             to 90.      //90
 parameter desiredInclanation    to 0. 
+parameter upperStageThrust      to 30.
 
 clearScreen.
 parameter toStage to 1.
@@ -70,16 +71,31 @@ function MakePitchRateFunction {
     }.
 }
 
-// check if the difference between ETA:apoapsis and time to flameout will be 0 before reaching apoapsis.
-// if not then pitch harder.
-
-
-set circBurnDegrees to 0. //7.6
 
 function PitchController2 {
-    set timeToFlameout to upperStageBurnTime - (TIME:seconds - upperStageIgnitedTime).
-    local cirbBurnPrecent to 0.5  - (timeToFlameout / upperStageBurnTime).
-    set pitchAng to 90 - ((circBurnDegrees * cirbBurnPrecent)).
+    
+    CreateCircularisationNode().
+    set nd to nextNode.
+    local maxAcc to upperStageThrust/ship:mass.
+    local np to nd:deltav.
+    local burnDuration to nd:deltav:mag / maxAcc.
+    lock steering to np.
+
+    wait until nd:eta <= (burnDuration/2).
+    set initialDv to nd:deltav.
+    local done to false.
+    SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 1.
+    SortUllage().
+
+    until done {
+        set maxACc to ship:maxthrust/ship:mass.
+        if(vdot(initialDv, nd:deltav) < 0) {
+            print "end maneuver".
+            SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
+            set done to True.
+        }
+    }
+    remove nd.
     
     wait 0.001.
 }
@@ -117,6 +133,7 @@ set ship:control:Pilotmainthrottle to 1.
 set fairingsDeployed to false.
 set timeToFlameout to upperStageBurnTime.
 set upperStageIgnitedTime to 0.
+set nd to 0.
 
 Launch().
 
@@ -130,11 +147,12 @@ until guidanceState = 0 {
     }
     else if guidanceState = 2 {
         set timeToAltitudeTestPoints to TimeToAltitudeSolver().
-        set pitchAng to pitchController(timeToAltitudeTestPoints[2][0]).
+        set pitchAng to round(pitchController(timeToAltitudeTestPoints[2][0]),2).
     }
 
     else if guidanceState = 3 {
         pitchController2().
+        set guidanceState to 0.
     }
 
     else if guidanceState = 0 {
@@ -169,8 +187,16 @@ until guidanceState = 0 {
     print "Sustainers = " + sustainers:length at(0, line).
     set line to line + 1.
     print "Uppers = " + uppers:length at(0, line).
+    local surfaceGravity to (body:mu/body:radius^2).
+    local orbitalSpeed to (body:radius * SQRT(surfaceGravity/(body:radius+apoapsis))).
+    local speedAtAp to SQRT(((1-ship:orbit:eccentricity) * ship:orbit:body:mu) / ((1 + ship:orbit:eccentricity) * ship:orbit:semimajoraxis)).
     set line to line + 1.
-    print "Fairings deployed= " + fairingsDeployed at(0, line).
+    print "SurfaceGravity= " + surfaceGravity at(0, line).
+    set line to line + 1.
+    print "orbitalSpeed= " + orbitalSpeed at(0, line).
+    set line to line + 1.
+    print "speed at ap= " + speedAtAp at(0, line).
+    
 }
 
 // *********** start azimuth control *****************
@@ -248,25 +274,29 @@ function Stager {
                 }
             }
         }
-        else if(ETA:apoapsis < (upperStageBurnTime / 2)) {
-            if uppers:length <> 0{
-                SortUllage().
-                set stageState to 2.
-                set guidanceState to 3.
-                set lastApoapsis to ship:apoapsis.
-                set upperStageIgnitedTime to TIME:seconds.
-                set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
-                CreateCircularisationNode().
-                set circBurnDegrees to GetCircularisationBurnDegrees().
-            }
+        else  {
+            set stageState to 2.
+            set guidanceState to 3.
+            set lastApoapsis to ship:apoapsis.
+            set upperStageIgnitedTime to TIME:seconds.
+            set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
         }
     }
 }
 
 function CreateCircularisationNode {
-    local requiredSpeed to sqrt(body:mu * (2/body:radius + apoapsis)).
-    set circNode to NODE(timeSpan(eta:apoapsis), 0, 0, requiredSpeed).
+    // local requiredSpeed to sqrt(body:mu * (2/body:radius + apoapsis)).
+    // set circNode to NODE(timeSpan(eta:apoapsis), 0, 0, requiredSpeed).
+    // add circNode.
+
+    local surfaceGravity to (body:mu/body:radius^2).
+    local orbitalSpeed to (body:radius * SQRT(surfaceGravity/(body:radius+apoapsis))).
+    local speedAtAp to SQRT(((1-ship:orbit:eccentricity) * ship:orbit:body:mu) / ((1 + ship:orbit:eccentricity) * ship:orbit:semimajoraxis)).
+    local dvCirc to orbitalSpeed - speedAtAp.
+    local circNode to NODE (TIME:SECONDS + eta:apoapsis,0 ,0 , dvCirc).
     add circNode.
+    set line to line +1.
+    print "node created" at (0, line).
 }
 
 function SortUllage {
@@ -282,12 +312,12 @@ function SortUllage {
             // else stage.
             stage.
             set line to line + 1.
-            print "staging ullage thrusters "  at(0, line).
+            // print "staging ullage thrusters "  at(0, line).
             wait UNTIL upper:FUELSTABILITY >= 0.8.
             wait until stage:READY.
             stage.
             set line to line + 1.
-            print "stagin upper stage"  at(0, line).
+            // print "stagin upper stage"  at(0, line).
         }
     }
 }
@@ -318,11 +348,4 @@ function OpenFairings {
         wait 1.
         set fairingsDeployed to true.
     }
-}
-
-function GetCircularisationBurnDegrees {
-    local orbitDegrees to 360.
-    local orbitalPeriodSeconds to 5400.
-    local obtPeriodPrecent to upperStageBurnTime / orbitalPeriodSeconds.
-    return (orbitDegrees * obtPeriodPrecent). 
 }
