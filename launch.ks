@@ -3,10 +3,8 @@ parameter desiredPeriapsis      to 200_000. //At what altitude does the craft hi
 parameter upperStageBurnTime    to 120.     
 parameter pitchAtAp             to 90.      //90
 parameter desiredInclanation    to 0. 
-parameter upperStageThrust      to 30.
 
 clearScreen.
-parameter toStage to 1.
 LOCK g TO SHIP:BODY:MU / (SHIP:BODY:RADIUS + SHIP:ALTITUDE)^2.
 LOCK twr to (Thrust() / (g * ship:mass)).
 
@@ -73,24 +71,53 @@ function MakePitchRateFunction {
 
 
 function PitchController2 {
-    
+    SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
+    stage.
+    print "staging".
+    wait 0.5.
     CreateCircularisationNode().
+    set line to 18.
     set nd to nextNode.
-    local maxAcc to upperStageThrust/ship:mass.
-    local np to nd:deltav.
-    local burnDuration to nd:deltav:mag / maxAcc.
-    lock steering to np.
 
-    wait until nd:eta <= (burnDuration/2).
-    set initialDv to nd:deltav.
+    local TIsp to ThrustIsp().
+    local upperStageThrust to TIsp[0].
+    local vex to TIsp[1].
+
+    local maxAcc to upperStageThrust/mass.
+
+    print "vex" + vex at (0,line).
+    set line to line +1.
+    print "max acc" + maxAcc at (0,line).
+    set line to line +1.
+    print "e" + constant:e at (0,line).
+    set line to line +1.
+    print "-nd:deltaV:mag" + -nd:deltav:mag at (0,line).
+
+
+    local dob to vex / maxAcc * (1 -  constant:e^(-nd:deltav:mag/vex)).
+    local dob2 to vex/maxAcc - vex*dob/nd:deltav:mag.
+
+    set line to line +1.
+    print "dob" + dob at (0,line).
+    set line to line +1.
+    print "dob2" + dob2 at (0,line).
+    set line to line + 1.
+    print "Burn duration: " + round(dob) + " s" at(0, line).
+    
+    lock steering to lookdirup(nd:deltav*(upperStageThrust/abs(upperStageThrust)),-body:position).
+    set rcs to true.
+    local initialDv to nd:deltav.
+    wait until nd:eta <= dob2 - 15.
+
+    wait until nd:eta <= dob2.
+
     local done to false.
-    SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 1.
     SortUllage().
-
+    SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 1.
     until done {
-        set maxACc to ship:maxthrust/ship:mass.
+        set maxACc to upperStageThrust/ship:mass.
         if(vdot(initialDv, nd:deltav) < 0) {
-            print "end maneuver".
+        // if ((0.02 < ship:orbit:eccentricity and ship:orbit:eccentricity < 0.04) and periapsis > 300_000) {
             SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
             set done to True.
         }
@@ -112,6 +139,7 @@ set boosters to SHIP:PARTSDUBBED("Booster").
 set sustainers to SHIP:PARTSDUBBED("Sustainer").
 set uppers to SHIP:PARTSDUBBED("Upper").
 
+
 //Countdown
 PRINT "Count down:".
 FROM {local countdown is 4.} UNTIL countdown = 0 STEP {SET countdown to countdown - 1.} DO {
@@ -125,14 +153,14 @@ set guidanceState to 1.
 set stageState to 1.
 
 local turnAltitude         to 10.
-local lastApoapsis          to 0.
+// local lastApoapsis          to 0.
 local pitchAng              to 0.
 local compass               to inst_az(desiredInclanation).
 lock steering               to lookdirup(heading(compass,90-pitchAng):vector,ship:facing:upvector).
 set ship:control:Pilotmainthrottle to 1.
 set fairingsDeployed to false.
 set timeToFlameout to upperStageBurnTime.
-set upperStageIgnitedTime to 0.
+// set upperStageIgnitedTime to 0.
 set nd to 0.
 
 Launch().
@@ -151,8 +179,12 @@ until guidanceState = 0 {
     }
 
     else if guidanceState = 3 {
+
+        wait until stage:READY.
+
         pitchController2().
         set guidanceState to 0.
+        wait 0.001.
     }
 
     else if guidanceState = 0 {
@@ -254,7 +286,7 @@ function Stager {
     if stage:nextDecoupler<>"None" and stageState = 1{
         if boosters:length <> 0 {
             for booster in boosters {
-                if booster:flameout
+                if (booster:maxthrust * 0.2) > booster:thrust
                 {
                     UNTIL STAGE:READY WAIT 0.
                     stage.
@@ -277,18 +309,12 @@ function Stager {
         else  {
             set stageState to 2.
             set guidanceState to 3.
-            set lastApoapsis to ship:apoapsis.
-            set upperStageIgnitedTime to TIME:seconds.
             set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
         }
     }
 }
 
 function CreateCircularisationNode {
-    // local requiredSpeed to sqrt(body:mu * (2/body:radius + apoapsis)).
-    // set circNode to NODE(timeSpan(eta:apoapsis), 0, 0, requiredSpeed).
-    // add circNode.
-
     local surfaceGravity to (body:mu/body:radius^2).
     local orbitalSpeed to (body:radius * SQRT(surfaceGravity/(body:radius+apoapsis))).
     local speedAtAp to SQRT(((1-ship:orbit:eccentricity) * ship:orbit:body:mu) / ((1 + ship:orbit:eccentricity) * ship:orbit:semimajoraxis)).
@@ -300,26 +326,11 @@ function CreateCircularisationNode {
 }
 
 function SortUllage {
-    for upper in uppers
-    {
-        if (not upper:ignition)
-        {
-            // if ullageRcs:length <> 0 {
-            //     if(not ullageRcs:enabled) {
-            //         stage.
-            //     }
-            // }
-            // else stage.
-            stage.
-            set line to line + 1.
-            // print "staging ullage thrusters "  at(0, line).
-            wait UNTIL upper:FUELSTABILITY >= 0.8.
-            wait until stage:READY.
-            stage.
-            set line to line + 1.
-            // print "stagin upper stage"  at(0, line).
-        }
-    }
+    stage.
+    set ship:control:fore to 1.
+    wait UNTIL uppers[0]:FUELSTABILITY > 0.9.
+    set ship:control:fore to 0.
+    set ship:control:Pilotmainthrottle to 1.
 }
 
 local function Thrust {
@@ -329,6 +340,18 @@ local function Thrust {
       set TotalThrust to TotalThrust + e:Thrust.
    }
    return TotalThrust.
+}
+
+function ThrustIsp {
+    local vex to 1.
+    local ff to 0.
+    local tt to 0.
+    for upper in uppers {
+        set ff to ff + upper:availablethrust/max(upper:visp, 0.01).
+        set tt to tt + upper:availablethrust*vDot(facing:vector, upper:facing:vector).
+    }
+    if tt<>0 set vex to 9.80665*tt/ff.
+    return list(tt,vex).
 }
 
 function MachNumber {
