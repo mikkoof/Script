@@ -107,17 +107,15 @@ function PitchController2 {
     lock steering to lookdirup(nd:deltav*(upperStageThrust/abs(upperStageThrust)),-body:position).
     set rcs to true.
     local initialDv to nd:deltav.
-    wait until nd:eta <= dob2 - 15.
-
-    wait until nd:eta <= dob2.
+    wait until nd:eta <= dob2 - 5.
 
     local done to false.
     SortUllage().
+    wait until nd:eta <= dob2.
     SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 1.
     until done {
         set maxACc to upperStageThrust/ship:mass.
         if(vdot(initialDv, nd:deltav) < 0) {
-        // if ((0.02 < ship:orbit:eccentricity and ship:orbit:eccentricity < 0.04) and periapsis > 300_000) {
             SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
             set done to True.
         }
@@ -326,9 +324,10 @@ function CreateCircularisationNode {
 }
 
 function SortUllage {
-    stage.
+    // stage.   
     set ship:control:fore to 1.
-    wait UNTIL uppers[0]:FUELSTABILITY > 0.9.
+    wait UNTIL uppers[0]:FUELSTABILITY >= 1.
+    wait 0.1.
     set ship:control:fore to 0.
     set ship:control:Pilotmainthrottle to 1.
 }
