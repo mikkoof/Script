@@ -1,8 +1,13 @@
 // *********** parameters *******************
+
+
+parameter desiredApoapsis       to 200_000.
 parameter desiredPeriapsis      to 200_000. //At what altitude does the craft hit 90 pitch 
+parameter turnCompleteAltitude  to 140_000.
 parameter upperStageBurnTime    to 120.     
 parameter pitchAtAp             to 90.      //90
 parameter desiredInclanation    to 0. 
+parameter upperIgnitions        to 1.
 
 clearScreen.
 LOCK g TO SHIP:BODY:MU / (SHIP:BODY:RADIUS + SHIP:ALTITUDE)^2.
@@ -40,7 +45,7 @@ function AltitudeIntegrationJerk {
 
 function TimeToAltitudeScore {
     parameter inputTime.
-    return desiredPeriapsis - AltitudeIntegrationJerk(inputTime). //160_000.
+    return turnCompleteAltitude - AltitudeIntegrationJerk(inputTime). //160_000.
 }
 
 function MakePitchRateFunction {
@@ -71,10 +76,15 @@ function MakePitchRateFunction {
 
 
 function PitchController2 {
-    SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
-    stage.
-    print "staging".
-    wait 0.5.
+    parameter coast to true.
+    if coast {
+        SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
+        if not uppers[0]:ignition {
+            stage.
+        }
+        print "staging".
+        wait 0.5.
+    }
     CreateCircularisationNode().
     set line to 18.
     set nd to nextNode.
@@ -107,15 +117,16 @@ function PitchController2 {
     lock steering to lookdirup(nd:deltav*(upperStageThrust/abs(upperStageThrust)),-body:position).
     set rcs to true.
     local initialDv to nd:deltav.
-    wait until nd:eta <= dob2 - 5.
-
     local done to false.
-    SortUllage().
+    if coast {
+        wait until nd:eta <= dob2 - 5.
+        SortUllage().
+    }
     wait until nd:eta <= dob2.
     SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 1.
     until done {
         set maxACc to upperStageThrust/ship:mass.
-        if(vdot(initialDv, nd:deltav) < 0) {
+        if(vdot(initialDv, nd:deltav) < 0 and apoapsis > desiredApoapsis) {
             SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
             set done to True.
         }
@@ -124,6 +135,7 @@ function PitchController2 {
     
     wait 0.001.
 }
+
 
 local timeToAltitudeSolver to makeBiSectSolver(TimeToAltitudeScore@,100,101).
 local timeToAltitudeTestPoints to timeToAltitudeSolver().
@@ -184,7 +196,12 @@ until guidanceState = 0 {
         set guidanceState to 0.
         wait 0.001.
     }
-
+    else if guidanceState = 3.1 {   
+        wait until stage:READY.
+        PitchController2(false).         
+        set guidanceState to 0.
+        wait 0.001.
+    }
     else if guidanceState = 0 {
         set ship:control:Pilotmainthrottle to 0.
     }
@@ -209,8 +226,6 @@ until guidanceState = 0 {
     print "launch upper = " + (ship:apoapsis < desiredPeriapsis or ETA:apoapsis < (upperStageBurnTime / 2)) at(0, line).
     set line to line + 1.
     print "Eta apoapsis = " + ETA:apoapsis at(0, line).
-    set line to line + 1.
-    print "TimeToFlameout / 2 = " + timeToFlameout/2 at(0, line).
     set line to line + 1.
     print "Boosters = " + boosters:length at(0, line).
     set line to line + 1.
@@ -270,7 +285,7 @@ local function Launch{
         stage.
         // print twr.
         if stage:nextDecoupler:istype("LaunchClamp") {
-            wait until twr > 1.1.
+            wait until twr > 0.5.
             // print twr.
             stage.
             wait 0.5.
@@ -278,13 +293,12 @@ local function Launch{
     } 
 }
 
-//stage if apogee under target altitude or time to apogee is under stage burn time.
 
 function Stager {
     if stage:nextDecoupler<>"None" and stageState = 1{
         if boosters:length <> 0 {
             for booster in boosters {
-                if (booster:maxthrust * 0.2) > booster:thrust
+                if (booster:maxthrust * 0.1) > booster:thrust
                 {
                     UNTIL STAGE:READY WAIT 0.
                     stage.
@@ -297,17 +311,29 @@ function Stager {
             //set stageState to toStage.
             for sustainer in sustainers {
                 if sustainer:flameout {
+                    if apoapsis > desiredApoapsis {
+                        SET SHIP:CONTROL:PILOTMAINTHROTTLE TO 0.
+                    }
                     UNTIL STAGE:READY WAIT 0.
                     stage.
                     set sustainers to SHIP:PARTSDUBBED("Sustainer").
-                    // print "staging sustainer. Sustainers lenght " + Sustainers:length at(0, line).
+                    set rcs to true.
                 }
             }
         }
         else  {
-            set stageState to 2.
-            set guidanceState to 3.
-            set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
+            if apoapsis > desiredPeriapsis { 
+                if upperIgnitions > 1 {
+                    set stageState to 2.
+                    set guidanceState to 3.
+                    set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
+                }
+                else {
+                    set stageState to 2.
+                    set guidanceState to 3.1.
+                    set timeToFlameout to TIME:SECONDS + upperStageBurnTime. //seconds + 120
+                }
+            }
         }
     }
 }
